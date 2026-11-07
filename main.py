@@ -164,27 +164,75 @@ FALLBACK_QUOTES_EN = [
 
 
 async def translate_text(text: str, target_lang: str) -> str:
-    """Асинхронный перевод текста через бесплатный API Google Translate."""
+    """Асинхронный перевод с 3 резервными шлюзами (не блокируется на VPS)."""
     if not text or target_lang == "en":
         return text
 
-    url = "https://translate.googleapis.com/translate_a/single"
-    params = {
-        "client": "gtx",
-        "sl": "auto",
-        "tl": target_lang,
-        "dt": "t",
-        "q": text,
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
     }
-    try:
-        timeout = aiohttp.ClientTimeout(total=4)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, params=params) as resp:
+    timeout = aiohttp.ClientTimeout(total=5)
+    # Принудительно используем IPv4 — Google часто банит IPv6-подсети VPS хостингов
+    connector = aiohttp.TCPConnector(family=socket.AF_INET, ssl=False)
+
+    async with aiohttp.ClientSession(
+        timeout=timeout, headers=headers, connector=connector
+    ) as session:
+        # Шлюз 1: Стандартный Google GTX
+        try:
+            url_1 = "https://translate.googleapis.com/translate_a/single"
+            params_1 = {
+                "client": "gtx",
+                "sl": "en",
+                "tl": target_lang,
+                "dt": "t",
+                "q": text,
+            }
+            async with session.get(url_1, params=params_1) as resp:
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
-                    return "".join(part[0] for part in data[0] if part[0])
-    except Exception as e:
-        logger.warning(f"Ошибка при переводе на {target_lang}: {e}")
+                    result = "".join(part[0] for part in data[0] if part[0])
+                    if result and result.lower() != text.lower():
+                        return result
+        except Exception as e:
+            logger.debug(f"Шлюз 1 (GTX) не сработал: {e}")
+
+        # Шлюз 2: Альтернативный клиентский сервер Google (clients5)
+        try:
+            url_2 = "https://clients5.google.com/translate_a/t"
+            params_2 = {
+                "client": "dict-chrome-ex",
+                "sl": "en",
+                "tl": target_lang,
+                "q": text,
+            }
+            async with session.get(url_2, params=params_2) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    if isinstance(data, list) and data:
+                        first = data[0]
+                        result = first[0] if isinstance(first, list) else str(first)
+                        if result and result.lower() != text.lower():
+                            return result
+        except Exception as e:
+            logger.debug(f"Шлюз 2 (clients5) не сработал: {e}")
+
+        # Шлюз 3: Бесплатный переводчик MyMemory API (лоялен к любым VPS IP)
+        try:
+            url_3 = "https://api.mymemory.translated.net/get"
+            params_3 = {
+                "q": text,
+                "langpair": f"en|{target_lang}",
+            }
+            async with session.get(url_3, params=params_3) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    translated = (data.get("responseData") or {}).get("translatedText")
+                    if translated and "MYMEMORY WARNING" not in translated:
+                        return translated.strip()
+        except Exception as e:
+            logger.warning(f"Все 3 шлюза перевода вернули ошибку ({target_lang}): {e}")
 
     return text
 
