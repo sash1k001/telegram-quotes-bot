@@ -742,12 +742,11 @@ async def scheduled_quote_sender(bot: Bot):
             translated_cache[lang_code] = f"✨ <i>«{t_text}»</i>\n\n— <b>{t_author}</b>"
 
         quote_msg = translated_cache[lang_code]
-        header = "🔄 <b>Цитата по интервалу:</b>" if mode == "interval" else "🌅 <b>Ежедневная цитата:</b>"
 
         try:
             await bot.send_message(
                 chat_id=user_id,
-                text=f"{header}\n\n{quote_msg}",
+                text=f"{quote_msg}",
             )
             if mode == "interval":
                 await db.update_last_sent(user_id, now_ts)
